@@ -11,57 +11,44 @@ class Domain(sparkSession: SparkSession) {
 
   import sparkSession.implicits._
 
-  def getDataFromCsv(rddTransactions: DataFrame, sparkSession: SparkSession): (Dataset[Client], Dataset[Transaction]) = {
+  def getDataFromCsv(rddTransactions: DataFrame, sparkSession: SparkSession):  Dataset[Transaction] = {
     val acumulator = sparkSession.sparkContext.longAccumulator("idClient")
-    val dfModels = rddTransactions.map(row => {
+    val dfTransactions = rddTransactions.map(row => {
       acumulator.add(1)
-      (
-        Client(acumulator.value,
+
+        Transaction( Client(acumulator.value,
           row.getAs[String]("Name").trim,
           row.getAs[String]("Account_Created").toLong),
-        Transaction(acumulator.value,
           parseToDate(row.getAs[String]("Transaction_date"), "M/d/yy h:mm"),
           row.getAs[String]("Price").toDouble,
           row.getAs[String]("Description").trim,
           getCategory(row.getAs[String]("Description").trim),
           row.getAs("Payment_Type")
-          ,Geolocation(row.getAs[String]("Latitude").toDouble,row.getAs[String]("Longitude").toDouble, row.getAs[String]("City").trim, "")))
+          ,Geolocation(row.getAs[String]("Latitude").toDouble,row.getAs[String]("Longitude").toDouble, row.getAs[String]("City").trim, ""))
     })
 
-    val dfClients = dfModels.map((row: (Client, Transaction)) =>
-      row._1
-    )
-    val dfTransactions = dfModels.map( row =>
-      row._2
-    )
-    (dfClients, dfTransactions)
+
+     dfTransactions
   }
 
-  def getData(rddTransactions: RDD[TransactionRecord], acumulator: LongAccumulator): (Dataset[Client], Dataset[Transaction]) = {
+  def getData(rddTransactions: RDD[TransactionRecord], acumulator: LongAccumulator): Dataset[Transaction] = {
 
-    val dfModels = rddTransactions.map(row => {
+    val dfTransactions = rddTransactions.map(row => {
 
       acumulator.add(1)
-      (
-        Client(acumulator.value,
+
+        Transaction(Client(acumulator.value,
           row.name.trim,
           row.ccc.toLong),
-        Transaction(acumulator.value,
           new java.sql.Date(row.transactionDate.getMillis),
           row.price.toDouble,
           row.description.trim,
           getCategory(row.description.trim),
           row.paymentType
-          ,Geolocation(row.latitude,row.longitude, row.city.trim, "")))
+          ,Geolocation(row.latitude,row.longitude, row.city.trim, ""))
     })
 
-    val dfClients = dfModels.map((row: (Client, Transaction)) =>
-      row._1
-    )
-    val dfTransactions = dfModels.map( row =>
-      row._2
-    )
-    (dfClients.toDS(), dfTransactions.toDS())
+    dfTransactions.toDS()
   }
 
   def getTransactionsPerCity(dfTransactions: Dataset[Transaction]): DataFrame = {
@@ -73,19 +60,19 @@ class Domain(sparkSession: SparkSession) {
     dfTransactionsPerCity
   }
 
-  def getClientsAmount500(dfTransactions: Dataset[Transaction], dfClients:Dataset[Client]): DataFrame = {
+  def getClientsAmount500(dfTransactions: Dataset[Transaction]): DataFrame = {
 
-    val dfClientsAmount500 = dfClients.join(dfTransactions,dfClients("id") === dfTransactions("idClient"), "inner")
+    val dfClientsAmount500 = dfTransactions
       .where("amount > 500")
-      .select("name", "ccc")
+      .select("client.name", "client.ccc")
 
-    /*val dfClientsAmount500SQL = sparkSession.sql("SELECT c.name, c.ccc FROM Transactions t INNER JOIN Clients c ON c.id = t.idClient WHERE t.amount > 500")*/
+    /*val dfClientsAmount500SQL = sparkSession.sql("SELECT client.name, client.ccc FROM Transactions WHERE t.amount > 500")*/
     dfClientsAmount500
   }
 
-  def getClientsFromLondon(dfTransactions: Dataset[Transaction], dfClients:Dataset[Client]): DataFrame = {
-    val dfClientsFromLondon = dfClients.join(dfTransactions, dfClients("id") === dfTransactions("idClient"), joinType = "inner")
-      .where("geolocation.city = \"London\"").groupBy(dfClients("name")).count().withColumnRenamed("count", "transactionsCount")
+  def getClientsFromLondon(dfTransactions: Dataset[Transaction]): DataFrame = {
+    val dfClientsFromLondon = dfTransactions
+      .where("geolocation.city = \"London\"").groupBy(dfTransactions("client.name")).count().withColumnRenamed("count", "transactionsCount")
 
     /*val dfClientsFromLondonSQL =  sparkSession.sql(
       "SELECT c.name, count(*) FROM Transactions t INNER JOIN Clients c ON c.id = t.idClient WHERE t.geolocation.city = \"London\" GROUP BY c.name")*/
@@ -95,19 +82,21 @@ class Domain(sparkSession: SparkSession) {
   def getTransactionsOcio(dfTransactions: Dataset[Transaction]): DataFrame = {
 
     val dfTransactionsOcio = dfTransactions.where(dfTransactions("category") === "Ocio")
-      .select("idClient", "date", "amount", "description", "category", "geolocation.latitude", "geolocation.longitude", "geolocation.city", "geolocation.country")
+      .select("client.id", "client.name", "date", "amount", "description", "category", "geolocation.latitude", "geolocation.longitude", "geolocation.city", "geolocation.country")
     /*val dfTransactionsOcioSQL = sparkSession.sql("SELECT idClient, amount, description, creditCardType FROM Transactions WHERE category = \"Ocio\"")*/
     dfTransactionsOcio
   }
 
-  def getLast30DaysTransactions(dfTransactions: Dataset[Transaction], dfClients: Dataset[Client]): DataFrame = {
+  def getLast30DaysTransactions(dfTransactions: Dataset[Transaction]): DataFrame = {
 
-    val lastTransaction = dfTransactions.select(max(dfTransactions("date"))).first().getAs[java.sql.Date](0)
+    var lastTransaction = dfTransactions.select(max(dfTransactions("date"))).first().getAs[java.sql.Date](0)
 
-
-    val dfLast30DaysTransactions = dfClients.join(dfTransactions, dfClients("id") === dfTransactions("idClient"), joinType = "inner")
+    if (lastTransaction == null){
+      lastTransaction = new java.sql.Date(0)
+    }
+    val dfLast30DaysTransactions = dfTransactions
       .where("DATEDIFF(date, \""  + lastTransaction.toString + "\") < 30")
-      .groupBy(dfClients("name"))
+      .groupBy(dfTransactions("client.name"))
       .count()
       .withColumnRenamed("count", "transactionsCount")
 

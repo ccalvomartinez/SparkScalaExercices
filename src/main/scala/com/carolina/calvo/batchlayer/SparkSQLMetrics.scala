@@ -15,19 +15,16 @@ object SparkSQLMetrics {
     val domain = new Domain(sparkSession)
     val rddTransactions = sparkSession.read.option("header", "true").csv(s"file:///${args(0)}")
 
-    val dfModels = domain.getDataFromCsv(rddTransactions, sparkSession)
-
-    val dfClients = dfModels._1
-    val dfTransactions = dfModels._2
+    val dfTransactions = domain.getDataFromCsv(rddTransactions, sparkSession)
 
     val dfTransactionsPerCity = domain.getTransactionsPerCity(dfTransactions)
     dfTransactionsPerCity.coalesce(1).write.mode(SaveMode.Overwrite).option("header", "true").csv(s"${args(1).toString}/TransaccionesPorCiudad.csv")
 
-    val dfClientsAmount500 = domain.getClientsAmount500(dfTransactions, dfClients)
+    val dfClientsAmount500 = domain.getClientsAmount500(dfTransactions)
     dfClientsAmount500.write.mode(SaveMode.Overwrite).orc(s"${args(1).toString}/ClientesCompras500.orc")
 
 
-    val dfClientsFromLondon = domain.getClientsFromLondon(dfTransactions, dfClients)
+    val dfClientsFromLondon = domain.getClientsFromLondon(dfTransactions)
     dfClientsFromLondon.write.mode(SaveMode.Overwrite).parquet(s"${args(1).toString}/ClientesDeLondres.parquet")
 
 
@@ -35,7 +32,7 @@ object SparkSQLMetrics {
     dfTransactionsOcio.coalesce(1).write.mode(SaveMode.Overwrite).option("header", "true").csv(s"${args(1).toString}/TransaccionesOcio.csv")
 
 
-    val dfLast30DaysTransactions = domain.getLast30DaysTransactions(dfTransactions, dfClients)
+    val dfLast30DaysTransactions = domain.getLast30DaysTransactions(dfTransactions)
     dfLast30DaysTransactions.coalesce(1).write.mode(SaveMode.Overwrite).option("header", "true").csv(s"${args(1).toString}/TransaccionesUltimos30Dias.csv")
 
 
@@ -43,7 +40,7 @@ object SparkSQLMetrics {
     dfTransactionsWithCountry.coalesce(1).write.mode(SaveMode.Overwrite).parquet(s"${args(1).toString}/TransaccionesConPais.parquet")
 
     val dfTransactionsPerPaymentType = domain.getTransactionsPerPaymentType(dfTransactions)
-    dfTransactionsPerPaymentType.coalesce(1).write.mode(SaveMode.Overwrite).option("header", "true").csv(s"${args(1).toString}/TransactionesPorTipoTarjetacsv")
+    dfTransactionsPerPaymentType.coalesce(1).write.mode(SaveMode.Overwrite).option("header", "true").csv(s"${args(1).toString}/TransactionesPorTipoTarjeta.csv")
 
     val dfTransactionsPerCountry = domain.getTransactionsPerCountry(dfTransactionsWithCountry)
       dfTransactionsPerCountry.coalesce(1).write.mode(SaveMode.Overwrite).option("header", "true").csv(s"${args(1).toString}/TransacionesPorPais")

@@ -1,15 +1,17 @@
 package com.carolina.calvo.speedlayer.generator
 
+import com.carolina.calvo.model.TransactionRecord
+import com.carolina.calvo.serdes.TransactionRecordSerializer
 import org.joda.time.DateTime
 
 import scala.util.{Failure, Success, Try}
 
 
-class KafkaTransationProducer(inputTopic: String) {
+class KafkaTransactionProducer(inputTopic: String) {
 
   def produceMessages(): Unit = {
 
-    val producer = new KProducer()
+    val producer = new KProducer[String, TransactionRecord](classOf[TransactionRecordSerializer].getName)
 
 
     for (a <- 1 to 50) {

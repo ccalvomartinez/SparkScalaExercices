@@ -3,11 +3,11 @@ package com.carolina.calvo.speedlayer
 import com.carolina.calvo.domain.Domain
 import com.carolina.calvo.model.TransactionRecord
 import com.carolina.calvo.serdes.TransactionRecordDeserializer
-import com.carolina.calvo.speedlayer.generator.KafkaTransationProducer
+import com.carolina.calvo.speedlayer.generator.KafkaTransactionProducer
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.apache.spark._
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{SaveMode, SparkSession}
+import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.streaming._
 import org.apache.spark.streaming.kafka010.ConsumerStrategies.Subscribe
 import org.apache.spark.streaming.kafka010.LocationStrategies.PreferConsistent
@@ -20,19 +20,7 @@ object SparkStreamingMetrics {
   def run(args: Array[String]): Unit = {
 
 
-    val conf = new SparkConf().setMaster("local[*]").setAppName("SparkStreamingKafkaEjercicios")
 
-
-    val inputTopic = args(0)
-
-
-    val kafkaParams = Map[String, Object](
-      "bootstrap.servers" -> "localhost:9092",
-      "key.deserializer" -> classOf[StringDeserializer],
-      "value.deserializer" -> classOf[TransactionRecordDeserializer],
-      "group.id" -> "spark-demo",
-      "kafka.consumer.id" -> "kafka-consumer-01"
-    )
 
     val sparkSession = SparkSession.builder().master("local[*]")
       .appName("Speed Layer")
@@ -41,6 +29,17 @@ object SparkStreamingMetrics {
     val ssc = new StreamingContext(sparkSession.sparkContext, Seconds(5))
     val acumulator = sparkSession.sparkContext.longAccumulator("idClient")
 
+    val kafkaProducer = new KafkaResultsProducer
+
+    val inputTopic = args(1)
+    println(inputTopic)
+    val kafkaParams = Map[String, Object](
+      "bootstrap.servers" -> "localhost:9092",
+      "key.deserializer" -> classOf[StringDeserializer],
+      "value.deserializer" -> classOf[TransactionRecordDeserializer],
+      "group.id" -> "spark-demo",
+      "kafka.consumer.id" -> "kafka-consumer-01"
+    )
 
     val inputStream = KafkaUtils.createDirectStream(ssc,
       PreferConsistent, Subscribe[String, TransactionRecord](Array(inputTopic), kafkaParams))
@@ -52,67 +51,84 @@ object SparkStreamingMetrics {
       val lines: RDD[TransactionRecord] = rdd.map(record => record.value)
 
 
-      val dfModels = domain.getData(lines, acumulator)
-
-
-
-     val dfClients = dfModels._1
-      val dfTransactions = dfModels._2
+      val dfTransactions = domain.getData(lines, acumulator)
 
       val dfTransactionsPerCity = domain.getTransactionsPerCity(dfTransactions)
-      dfTransactionsPerCity.write.mode(SaveMode.Append).option("header", "true").csv(s"${args(1).toString}/TransaccionesPorCiudad.csv")
+      if (dfTransactionsPerCity.count()>0){
+        dfTransactionsPerCity.coalesce(1).write.mode(SaveMode.Append).option("header", "true").csv(s"${args(0).toString}/TransaccionesPorCiudad.csv")
+      }
+      dfTransactionsPerCity.foreach(row => {
+        kafkaProducer.send(args(2), row.toString())
+      })
 
-      val dfClientsAmount500 = domain.getClientsAmount500(dfTransactions, dfClients)
-      println("ENTRADA - Clientes compras mayor 500")
-      println("SALIDA - Clientes compras mayor 500", dfClientsAmount500.show(10))
+      val dfClientsAmount500 = domain.getClientsAmount500(dfTransactions)
+      if (dfClientsAmount500.count() > 0) {
+        dfClientsAmount500.write.mode(SaveMode.Append).orc(s"${args(0).toString}/ClientesCompras500.orc")
+      }
+      dfClientsAmount500.foreach(row => {
+        kafkaProducer.send(args(3), row.toString())
+      })
 
-      val dfClientsFromLondon = domain.getClientsFromLondon(dfTransactions, dfClients)
-      println("ENTRADA - Clientes Londres")
-      println("SALIDA - Clientes Londres", dfClientsFromLondon.show(10))
+      val dfClientsFromLondon = domain.getClientsFromLondon(dfTransactions)
+      if(dfClientsFromLondon.count() > 0) {
+        dfClientsFromLondon.write.mode(SaveMode.Append).parquet(s"${args(0).toString}/ClientesDeLondres.parquet")
+      }
+      dfClientsFromLondon.foreach(row => {
+        kafkaProducer.send(args(4), row.toString())
+      })
 
 
       val dfTransactionsOcio = domain.getTransactionsOcio(dfTransactions)
-      println("ENTRADA - Transacciones ocio")
-      println("SALIDA - Transacciones ocio", dfTransactionsOcio.show(10))
+      if (dfTransactionsOcio.count() > 0) {
+        dfTransactionsOcio.coalesce(1).write.mode(SaveMode.Append).option("header", "true").csv(s"${args(0).toString}/TransaccionesOcio.csv")
+      }
 
+      dfTransactionsOcio.foreach(row => {
+        kafkaProducer.send(args(5), row.toString())
+      })
 
-      val dfLast30DaysTransactions = domain.getLast30DaysTransactions(dfTransactions, dfClients)
-      println("ENTRADA - Transacciones de los últimos 30 días")
-      println("SALIDA - Transacciones de los últimos 30 días",dfLast30DaysTransactions.show(10))
+      val dfLast30DaysTransactions = domain.getLast30DaysTransactions(dfTransactions)
+      if(dfLast30DaysTransactions.count() > 0){
+        dfLast30DaysTransactions.coalesce(1).write.mode(SaveMode.Append).option("header", "true").csv(s"${args(0).toString}/TransaccionesUltimos30Dias.csv")
+      }
+      dfLast30DaysTransactions.foreach(row => {
+        kafkaProducer.send(args(6), row.toString())
+      })
 
+      val dfTransactionsWithCountry: DataFrame = domain.getTransactionsWithCountry(dfTransactions)
+      if(dfTransactionsWithCountry.count() > 0) {
+        dfTransactionsWithCountry.coalesce(1).write.mode(SaveMode.Append).parquet(s"${args(0).toString}/TransaccionesConPais.parquet")
+      }
+      dfTransactionsWithCountry.foreach(row => {
+        kafkaProducer.send(args(7), row.toString())
+      })
 
-      val dfTransactionsWithCountry = domain.getTransactionsWithCountry(dfTransactions)
-      println("ENTRADA - Transacciones con pais")
-      println("SALIDA - Transacciones con pais", dfTransactionsWithCountry.show(10))
+      val dfTransactionsPerCountry = domain.getTransactionsPerCountry(dfTransactionsWithCountry)
+      if(dfTransactionsPerCountry.count() > 0) {
+        dfTransactionsPerCountry.coalesce(1).write.mode(SaveMode.Append).option("header", "true").csv(s"${args(0).toString}/TransacionesPorPais.csv")
+      }
+      dfTransactionsPerCountry.foreach(row => {
+        kafkaProducer.send(args(8), row.toString())
+      })
+
+      val dfTransactionsPerPaymentType = domain.getTransactionsPerPaymentType(dfTransactions)
+      if(dfTransactionsPerPaymentType.count() > 0) {
+        dfTransactionsPerPaymentType.coalesce(1).write.mode(SaveMode.Append).option("header", "true").csv(s"${args(0).toString}/TransactionesPorTipoTarjeta.csv")
+      }
+      dfTransactionsPerPaymentType.foreach(row => {
+        kafkaProducer.send(args(9), row.toString())
+      })
+     
     }
 
 
-    /*val broker = "localhost:9092"
-    val properties = new Properties()
-    properties.put("bootstrap.servers", broker)
-    properties.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer")
-    properties.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer")
-
-    val outputTopic="mensajesSalida"
-> row.
-
-    val producer = new KafkaProducer[String, String](properties)
-
-    processedStream.foreachRDD(rdd =>
-
-      rdd.foreach {
-        data: String => {
-          val message = new ProducerRecord[String, String](outputTopic, data)
-          producer.send(message).get().toString
-        }
-      })*/
 
     Future {
       Thread.sleep(40000)
       ssc.stop(stopSparkContext = true, stopGracefully = true)
     }
     ssc.start()
-    val generator = new KafkaTransationProducer(args(0))
+    val generator = new KafkaTransactionProducer(inputTopic)
     generator.produceMessages()
     ssc.awaitTermination()
 
